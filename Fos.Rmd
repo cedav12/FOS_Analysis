@@ -1,0 +1,272 @@
+---
+title: "Instrumental Variables analysis"
+author: "Cerny David"
+date: "2022-12-06"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Analysis of course Fundamentals of statistics
+
+We have cross-sectional data about Fundamental of Statistics (FoS course) 2018 collected among students in Uzbekistan. Data are stored as `.xlsx` file. The legend related to this data could be found in file `Codebook.pdf`. The goal of this analysis is to inspect, whether there is a relationship between number of attended seminars and final grades.
+
+### Data
+
+Firstly, we wil import packages and the data. We can see that NA data are present in the dataset, but we will follow carefuly, since we have just 101 observation - if we remove all NA obs we would have just a few obs left. Notice 101 is approximately minimum required number of observation for assymptotic features to hold.
+
+```{r, message = FALSE, warning=FALSE}
+# import packages
+library("readxl")
+library("dplyr")
+library("lmtest")
+library("systemfit")
+library("ivreg")
+library("tseries")
+library("stargazer")
+
+FOS = read_excel("dataForStudents.xlsx")
+str(FOS)
+summary(FOS)
+```
+
+#### Which variables might affect students performance?
+
+**nfile** - number of files given student downloaded. With more downloaded files student might perform better at the final exam.
+
+**nlesson** - number of seminars given student attended. The seminar attendence might positively affect the performance.
+
+**ent_math** - entrance score in math. The statistics could be considered as applied math, therefore the math skill could be correlated with stats skill.
+
+#### Are there any factors, which could affect seminar attendance?
+
+**working** - whether given student worked during the semestr. If student works, he could be more busy and therefore could pass the seminar from time to time.
+
+### Inspecting the data at hand
+
+We will inspect the data at hand to find some usefull relationships or outliers.
+
+#### Could working affect the score and attendence?
+
+There seems to be an impact of working on the seminar attendence and final grade. The more student works, the less seminar he on average attend and the worse grade he on average obtain.
+
+```{r}
+work_fultime = FOS %>%
+  filter(working == "Full time") %>%
+  summarise(mean(mark_t_FoS), mean(nlesson))
+
+work_parttime = FOS %>%
+  filter(working == "Part time") %>%
+  summarise(mean(mark_t_FoS), mean(nlesson))
+
+workn = FOS %>%
+  filter(working == "No") %>%
+  summarise(mean(mark_t_FoS), mean(nlesson))
+
+working = FOS %>%
+  filter(working != "No") %>%
+  summarise(mean(mark_t_FoS), mean(nlesson))
+
+work_effect = as.matrix(rbind(work_fultime, work_parttime, working, workn))
+rownames(work_effect) = c("Full time", "Part time", "Job", "No job")
+work_effect
+```
+
+To catch the work effect we will create three dummy variables: **full_time**, **part_time**, **job**
+
+$$
+full\_time =
+\begin{cases}
+1 & \quad \text{if $working = \;Full\;time$}\\ 
+0 & \quad \text{otherwise}
+\end{cases}
+$$
+
+$$
+part\_time =
+\begin{cases}
+1 & \quad \text{if $working = \;Part\;time$}\\ 
+0 & \quad \text{otherwise}
+\end{cases}
+$$
+
+$$
+job =
+\begin{cases}
+1 & \quad \text{if $working \not =\; No$}\\ 
+0 & \quad \text{otherwise}
+\end{cases}
+$$
+
+
+
+```{r}
+FOS$full_time =0
+FOS$full_time[FOS$working == "Full time"] = 1
+FOS$part_time = 0
+FOS$part_time[FOS$working == "Part time"] = 1
+FOS$job = 0
+FOS$job[FOS$working != "No"] = 1
+```
+
+### Simple Linear Regression model
+
+Firstly, we will estimate the simple linear regression model. The dependent variable is final score, the explanatory variables are number of lessons attended and number of files downloaded.
+Both explanatory variables are statisticaly significant, especially nlesson. $R^2 = 0.29$, which is definitely not bad
+
+```{r}
+simple_model = lm(mark_t_FoS ~ nlesson + nfile, data = FOS)
+summary(simple_model)
+```
+
+Since entry level of math could also affext final grade, we will add it as an explanatory variable. As we can see the ent_math is significant at 0.01 significance level and the $R^2$ adjusted, also increased (Note that the increase in $R^2$ does not imply improvement of the model, because the $R^2$ always increase, when we add another explanatory variable, therefore we use adjusted $R^2$, which punish us for the unwanted complexity, as an indicator.)
+
+```{r}
+lmmath = lm(mark_t_FoS ~ nlesson + nfile + ent_math, data = FOS)
+summary(lmmath)
+```
+
+```{r}
+stargazer(simple_model, lmmath, header=FALSE, 
+          title='Simple Linear Regression model', 
+          single.row=TRUE, type='text')
+```
+
+#### Are all explanatory variables exogenous?
+
+One of the crucial assumtion of OLS estimator is Strict Exogeneity. $\mathbb{E}[u_t | X] \not =\ 0$. When this assumption is violated, the OLS estimater cannot be unbiased. The less stricter assumption is Contemporaneous Exogeneity. $\mathbb{E}[u_t | X_t] \not =\ 0$. This is assumption of asymptotic process and if is violated the OLS estimator can no longer be either unbiased or consistent.
+
+The problem arises when $Cov(x,u) \not =\ 0 \implies \mathbb{E}[u_t | X_t] \not =\ 0$ $. The explanatory variable is in this case endogeneos. There are several solution. We can use Proxy Model, Two-staged Least squares(TSLS) or Instrumental variable(special case of TSLS, when just one IV is used).
+
+In our model we could suspect the nlesson variable to be endogenoues(see above). If it is so we should use different model.
+
+#### Inspect nlesson
+
+Whether explanatory variable is exogenous or not cannot be straightforwardly tested. Firstly we will try to check, whether correlation between nlesson and working is present in the dataset. We will use correlation matrix to test it. When we will focus on the job dummy, we can see that there is negative correlation between having job and seminar attendance.
+
+
+```{r}
+cormat = cor(cbind(FOS$nlesson, FOS$full_time, FOS$part_time, FOS$job))
+labels = c("nlesson", "full_time", "part_time","job")
+colnames(cormat) = labels
+rownames(cormat) = labels
+cormat
+```
+
+
+### Instrumental variable
+b}
+We observed correlation between job and nlesson in our data, therefore we decided to use IV to estimate robust model. We will estimate IV regression model with job as the instrumental variable. But before it we should test, whether the job dummy is suitable for IV model. 
+
+The instrumental variable have to meet two assumptions. Instrumental variable $z$ should be uncorrelated with disturbances $u$: $Cov(z,u) = 0$ and $z$ should be correlated with the endogeneous variable $x$: $Cov(z,x) \not= 0$. When both assumption are met we can estimate new coefficient $\beta_1 = \frac{Cov(z,y)}{Cov(z,x)}$. Since the exogeneity cannot be easily tested, we will at least test correlation with the endogeneos variable.
+
+We will estimate model: 
+
+$x_i = \pi_0 + \pi_1z_i + \gamma$. 
+
+$Cov(z,x) = 0$ only if $\pi_0 =0$, which means when $z$ is statistically significant. 
+
+As we can see $z$ is significant and 95% significance level, there for we can reject the null hypothesis $H_0: \pi_0 = 0$.
+
+```{r}
+cov_model = lm(nlesson ~ job, data = FOS)
+summary(cov_model)
+```
+
+Now we will assume exogeneity of job and use it as IV. The procedure of IV model is following: 
+
+1. We have the simple regression model with endogeneous variable $nlesson$: 
+
+$mark\_t\_FoS_i = \beta_0 + \beta_1nlesson_i + \beta_2nfiles_i + \beta_3ent\_math + u_i$
+
+2. We will use IV $job$. From the first equation and IV assumptions above we can derive:
+
+$Cov(job, mark\_t\_FoS) = \beta_1Cov(job,mark\_t\_FoS) + Cov(job,u) \implies \beta_{1} = \frac{Cov(job, mark\_t\_Fos)}{Cov(job, nlesson)}$
+
+3. From the LLN:
+
+$\hat\beta_{1,IV} = \frac{\sum_{i=1}^n(job_i- \overline{job})(mark\_t\_FoS-\overline{mark\_t\_FoS}) }{\sum_{i=1}^n(job_i - \overline{job})(nlesson - \overline{nlesson})}$
+
+
+
+In R there is no need to derive these formulas, we can just use `tsls` or `ivreg` functions.
+
+As we can see the newly estimated model results are worse than the results of the simple linear regression model, but the model should be unbiased and consistent. The $R^2$ is much worse than in the initial model and last but not least the only significant variable is $ent\_math$.
+
+```{r,message=FALSE, warning=FALSE}
+IVreg = ivreg(mark_t_FoS ~ nlesson + nfile + ent_math | job + nfile + ent_math, data = FOS)
+summary(IVreg)
+```
+
+### Homoscedasticity testing
+
+In order to obtain valid statistical inference and valit t and F tests, we need to assume homoscedasticity:
+
+$Var(u) = \mathbb{E}[u^2|z] = \sigma^2$, in other words the variance of disturbances must be constant across the whole sample.
+
+There are several approaches how to test homoscedasticity, but we decided to use **Goldfeld-Quandt Test** and **Breusch-Pagan test**. We will use `gqtest` and `bptest` functions from the package `lmtest`. $H_0:$ there is homoscedasticity present, $H_A:$ variance increased between segments.
+
+According the test results we cannot reject the $H_0$ for both models at any reasonoble level.
+
+```{r}
+gqtest(IVreg)
+bptest(lmmath)
+```
+
+### Test for endogeneity
+
+In order to decide which model we will use, we will finally test endogeneity with **Hausman test**. $H_0:$ OLS and IV are both consistent, $H_A:$ OLS is inconsistent and IV is consistent. We will use `hausman.systemfit`function from the `systemfit` package. 
+
+From the results of hausman test we cannot reject the $H_0$, therefore it is better stick with the simple linear regression model, which would be asiptotically better.
+
+```{r}
+hausman.systemfit(IVreg, lmmath)
+```
+
+```{r}
+stargazer(IVreg, lmmath, header=FALSE, 
+          title='IVreg vs lmmath', 
+          single.row=TRUE, type='text')
+```
+
+
+#### OLS assumptions
+
+After the model testing we decided to use the simple OLS model:
+
+
+$mark\_t\_FoS_i = \beta_0 + \beta_1nlesson_i + \beta_2nfiles_i + \beta_3ent\_math + u_i$
+
+
+After the testing above we can conclude that OLS1-5 holds:
+
+**OLS1** - Linear in Parameter (holds)
+
+**OLS2** - Random sampling (according to characteristics of data collection, shoul hold)
+
+**OLS3** - No perfect Colinearity (holds)
+
+**OLS4** - Zero Conditional Mean (we cannot reject it)
+
+**OLS5** - Homoscedasticity (we cannot reject it)
+
+We need to test **OLS6** - Normality.
+
+We will use `jarque.bera.test` from `tseries` package, with $H_0:$ Residuals are normaly distributed.
+
+With $p\_value= 0.5962$ we cannot reject normality, thus OLS 1-6 are met, which implies, that t and F statistics are valid and our OLS estimator is **BLUE**(Best linear unbiased estimator).
+
+```{r}
+res = lmmath$residuals
+jarque.bera.test(res)
+```
+
+```{r}
+summary(lmmath)
+```
+
+### Conclusion
+
+After the several testing, we have chosed the Simple Linear Regression Model. The model met all OLS assumption, therefore is **BLUE**. When we look at results we can see, that all explanatory variables are statistically significant and have a positive affect on the final grade. Our goal was to inspect relationship between the number of lessons attended and the final grades. The increase in seminar attendance by one should cateris paribus increase final grade by one point (almost perfect linear relationship).  

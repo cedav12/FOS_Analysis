@@ -1,6 +1,6 @@
 # FoS course Regression Analysis
 We have cross-sectional data about Fundamentals of Statistics (FoS course) 2018 collected among students in Uzbekistan. 
-Data are stored as [`dataForStudents.xlsx`](data\dataForStudents.xlsx) file. The legend related to this data could be found in file [`Codebook.pdf`](data\Codebook.pdf).
+Data are stored as [`dataForStudents.xlsx`](data/dataForStudents.xlsx) file. The legend related to this data could be found in file [`Codebook.pdf`](data/Codebook.pdf).
 The goal of this analysis is to inspect, whether there is a relationship between number of attended seminars and final grades.
 
 The code is written in [`R`](IV_analysis.R) and knitted into pdf with [`RMarkdown file`](Fos.Rmd). The output of the analysis can be found in [`Fos.pdf`](Fos.pdf).
